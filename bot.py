@@ -3,7 +3,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sys
 import os
 
-bot = telebot.TeleBot("7607718949:AAE8fCdgMgygxJucZa_3CnupXs8u1AL7KvE")
+bot = telebot.TeleBot("7817789571:AAEchI-H-dpetjXcxSkLxz7NURm9yacML4Q")
 
 user_data = {}
 
@@ -11,7 +11,7 @@ user_data = {}
 def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("Menu", callback_data="menu"))
-    markup.add(InlineKeyboardButton("Developer", url="https://t.me/puneet"))
+    markup.add(InlineKeyboardButton("Developer", url="https://t.me/choudhary"))
     bot.send_message(message.chat.id, "👋 Welcome!", reply_markup=markup)
 
 
