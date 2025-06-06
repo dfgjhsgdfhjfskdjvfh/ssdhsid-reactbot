@@ -259,7 +259,7 @@ def get_menu_markup(status, delay, accounts):
     markup.row(InlineKeyboardButton("🔁 Restart", callback_data="exit_program"))
     
     # Developer in last row
-    markup.row(InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/puneet"))
+    markup.row(InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/choudhary"))
     
     return markup
 
