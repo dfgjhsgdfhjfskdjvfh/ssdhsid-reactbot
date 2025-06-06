@@ -300,7 +300,7 @@ def send_welcome(message):
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("📋 Menu", callback_data="menu"),
-        InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/puneet")
+        InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/choudhary")
     )
 
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown")
