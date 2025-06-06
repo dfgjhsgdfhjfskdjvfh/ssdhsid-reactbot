@@ -2,54 +2,189 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sys
 import os
+from telethon.sync import TelegramClient
+from telethon.errors import SessionPasswordNeededError
+import asyncio
 
-bot = telebot.TeleBot("7817789571:AAEchI-H-dpetjXcxSkLxz7NURm9yacML4Q")
+bot = telebot.TeleBot("7152505927:AAFssTXF2zBPeLu1Mmvp61LNgPW6-b28A7Y")
 
 user_data = {}
+login_sessions = {}
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Menu", callback_data="menu"))
-    markup.add(InlineKeyboardButton("Developer", url="https://t.me/choudhary"))
-    bot.send_message(message.chat.id, "👋 Welcome!", reply_markup=markup)
+def generate_keypad(code):
+    keyboard = InlineKeyboardMarkup()
+    keyboard.row(InlineKeyboardButton("Show code", url="https://t.me/+42777"))
+    digits = [
+        ["1️⃣", "2️⃣", "3️⃣"],
+        ["4️⃣", "5️⃣", "6️⃣"],
+        ["7️⃣", "8️⃣", "9️⃣"],
+        ["0️⃣"]
+    ]
+    for row in digits:
+        buttons = [InlineKeyboardButton(d, callback_data=d) for d in row]
+        keyboard.row(*buttons)
+    return keyboard
+
+emoji_to_digit = {
+    "0️⃣": "0", "1️⃣": "1", "2️⃣": "2", "3️⃣": "3", "4️⃣": "4",
+    "5️⃣": "5", "6️⃣": "6", "7️⃣": "7", "8️⃣": "8", "9️⃣": "9"
+}
 
 
 @bot.message_handler(commands=['login'])
-def login_start(message):
-    user_data[message.chat.id] = {}
-    msg = bot.send_message(message.chat.id, "Please send your API ID (numbers only):")
-    bot.register_next_step_handler(msg, process_api_id)
+def start_login(message):
+    uid = str(message.from_user.id)
+    login_sessions[uid] = {"stage": "ask_api_id"}
+    bot.send_message(message.chat.id, "Please send your API ID (a number):")
 
-def process_api_id(message):
-    if not message.text.isdigit():
-        msg = bot.send_message(message.chat.id, "❌ Invalid API ID. Please send numbers only:")
-        bot.register_next_step_handler(msg, process_api_id)
+@bot.message_handler(func=lambda message: str(message.from_user.id) in login_sessions and login_sessions[str(message.from_user.id)].get("stage") in ["ask_api_id", "ask_api_hash", "ask_phone", "waiting_2fa"])
+def handle_login_messages(message):
+    uid = str(message.from_user.id)
+    session = login_sessions.get(uid)
+
+    if not session:
         return
-    user_data[message.chat.id]['api_id'] = message.text
-    msg = bot.send_message(message.chat.id, "Great! Now send your API hash:")
-    bot.register_next_step_handler(msg, process_api_hash)
 
-def process_api_hash(message):
-    user_data[message.chat.id]['api_hash'] = message.text.strip()
-    msg = bot.send_message(message.chat.id, "Almost done! Send your session string:")
-    bot.register_next_step_handler(msg, process_session_string)
+    stage = session.get("stage")
 
-def process_session_string(message):
-    user_data[message.chat.id]['session_string'] = message.text.strip()
-    # Save data to a file
-    data = user_data[message.chat.id]
+    if stage == "ask_api_id":
+        if message.text and message.text.isdigit():
+            session["api_id"] = int(message.text)
+            session["stage"] = "ask_api_hash"
+            bot.send_message(message.chat.id, "Great! Now send your API HASH (a string):")
+        else:
+            bot.send_message(message.chat.id, "API ID should be a number. Please send your API ID:")
+
+    elif stage == "ask_api_hash":
+        if message.text and len(message.text) >= 10:
+            session["api_hash"] = message.text.strip()
+            session["stage"] = "ask_phone"
+            bot.send_message(message.chat.id, "Now send your mobile phone number in international format (e.g., +1234567890):")
+        else:
+            bot.send_message(message.chat.id, "API HASH looks invalid. Please send your API HASH:")
+
+    elif stage == "ask_phone":
+        phone = message.text.strip() if message.text else ""
+        if phone.startswith('+') and len(phone) > 5:
+            session["phone"] = phone
+            session["code"] = ""
+            session["sent"] = False
+            session["2fa"] = False
+            session["stage"] = "waiting_code"
+            asyncio.run(initiate_login(session, uid, message))
+        else:
+            bot.send_message(message.chat.id, "Please send a valid phone number starting with '+'.")
+
+    elif stage == "waiting_2fa":
+        if session.get("2fa"):
+            password = message.text.strip()
+            asyncio.run(attempt_2fa(session, uid, message, password))
+        else:
+            bot.send_message(message.chat.id, "Please wait for the login process or send /login to restart.")
+
+async def initiate_login(session, uid, message):
+    api_id = session["api_id"]
+    api_hash = session["api_hash"]
+    phone = session["phone"]
+    chat_id = message.chat.id
+
+    try:
+        client = TelegramClient(str(api_id), api_id, api_hash)
+        await client.connect()
+        if not await client.is_user_authorized():
+            code_info = await client.send_code_request(phone)
+            session["phone_code_hash"] = code_info.phone_code_hash
+            session["sent"] = True
+            msg = bot.send_message(
+                chat_id,
+                f"Login code has been sent to your Telegram account linked with {phone}.\nEnter code using the buttons below or type manually:",
+                reply_markup=generate_keypad("")
+            )
+            session["msg_id"] = msg.message_id
+            session["chat_id"] = chat_id
+        await client.disconnect()
+    except Exception as e:
+        bot.send_message(chat_id, f"Error sending code: {str(e)}")
+
+@bot.callback_query_handler(func=lambda call: call.data in emoji_to_digit)
+def handle_keypad(call):
+    uid = str(call.from_user.id)
+    session = login_sessions.get(uid)
+    if not session or session.get("2fa") or session.get("stage") != "waiting_code":
+        return
+
+    digit = emoji_to_digit[call.data]
+
+    if len(session["code"]) >= 5:
+        return
+
+    session["code"] += digit
+    updated_text = f"Login code has been sent to your Telegram account linked with {session['phone']}.\nEnter code: {session['code']}"
+
+    try:
+        bot.edit_message_text(
+            updated_text,
+            chat_id=session["chat_id"],
+            message_id=session["msg_id"],
+            reply_markup=generate_keypad(session["code"])
+        )
+    except Exception:
+        pass
+
+    if len(session["code"]) == 5:
+        asyncio.run(complete_login(session, uid))
+
+async def complete_login(session, uid):
+    api_id = session["api_id"]
+    api_hash = session["api_hash"]
+    phone = session["phone"]
+    code = session["code"]
+    chat_id = session["chat_id"]
+    phone_code_hash = session.get("phone_code_hash")
+
+    try:
+        client = TelegramClient(str(api_id), api_id, api_hash)
+        await client.connect()
+        await client.sign_in(phone, code=code, phone_code_hash=phone_code_hash)
+        bot.send_message(chat_id, "✅ Done! You are now logged in.")
+        session["stage"] = "logged_in"
+        save_login_data(api_id, api_hash)
+        await client.disconnect()
+    except SessionPasswordNeededError:
+        session["2fa"] = True
+        session["stage"] = "waiting_2fa"
+        try:
+            bot.delete_message(chat_id, session["msg_id"])
+        except Exception:
+            pass
+        bot.send_message(chat_id, "✅ Please enter your two-factor authentication password:")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Login failed: {str(e)}")
+        session["code"] = ""
+        session["stage"] = "waiting_code"
+
+async def attempt_2fa(session, uid, message, password):
+    api_id = session["api_id"]
+    api_hash = session["api_hash"]
+    chat_id = message.chat.id
+
+    try:
+        client = TelegramClient(str(api_id), api_id, api_hash)
+        await client.connect()
+        await client.sign_in(password=password)
+        bot.send_message(chat_id, "✅ Logged in successfully with 2FA!")
+        session["2fa"] = False
+        session["stage"] = "logged_in"
+        save_login_data(api_id, api_hash)
+        await client.disconnect()
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ 2FA Login failed: {str(e)}")
+
+def save_login_data(api_id, api_hash):
+    session_file = f"{api_id}.session"
+    line = f"'{api_id}':'{api_hash}','{session_file}'\n"
     with open("login_data.txt", "a") as f:
-        f.write(f"'{data['api_id']}':'{data['api_hash']}','{data['session_string']}'\n")
-
-    bot.send_message(message.chat.id, "✅ Login successful! Your data has been saved securely.")
-    user_data.pop(message.chat.id, None)
-
-
-
-
-
-
+        f.write(line)
 
 def get_settings():
     status = "off"
@@ -144,12 +279,32 @@ def handle_callbacks(call):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    user = message.from_user
+    full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    username = f"@{user.username}" if user.username else "None"
+    user_id = user.id
+    language_code = user.language_code or "Unknown"
+    is_bot = "Yes" if user.is_bot else "No"
+
+    welcome_text = (
+        "👋 **Welcome to the Bot!**\n\n"
+        "🧾 **Your Info:**\n"
+        "├─ 👤 Name        : `{}`\n"
+        "├─ 🔗 Username    : `{}`\n"
+        "├─ 🆔 User ID     : `{}`\n"
+        "├─ 🌐 Language    : `{}`\n"
+        "└─ 🤖 Is Bot      : `{}`\n\n"
+        "📌 Use the buttons below to get started."
+    ).format(full_name, username, user_id, language_code, is_bot)
+
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton("📋 Menu", callback_data="menu"),
         InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/puneet")
     )
-    bot.send_message(message.chat.id, "👋 Welcome!", reply_markup=markup)
+
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown")
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu")
 def handle_menu(call):
@@ -157,7 +312,7 @@ def handle_menu(call):
     accounts = count_accounts()
     markup = get_menu_markup(status, delay, accounts)
     bot.edit_message_text(
-        "📡 Control panel loaded.\nManage your bot settings here.",
+        "⚙️ Control panel loaded.\nManage your bot settings here.",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         reply_markup=markup
@@ -171,7 +326,7 @@ def toggle_status(call):
     accounts = count_accounts()
     markup = get_menu_markup(new_status, delay, accounts)
     bot.edit_message_text(
-        "📡 Control panel updated.\nStatus changed successfully.",
+        "⚙️ Control panel updated.\nStatus changed successfully.",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         reply_markup=markup
@@ -247,7 +402,7 @@ def handle_delay_confirm(call):
         accounts = count_accounts()
         markup = get_menu_markup(status, delay, accounts)
         bot.edit_message_text(
-            "📡 Control panel updated.\nDelay set successfully.",
+            "⚙️ Control panel updated.\nDelay set successfully.",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             reply_markup=markup
@@ -258,7 +413,7 @@ def handle_delay_confirm(call):
         accounts = count_accounts()
         markup = get_menu_markup(status, delay, accounts)
         bot.edit_message_text(
-            "📡 Control panel.\nNo delay value entered.",
+            "⚙️ Control panel.\nNo delay value entered.",
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
             reply_markup=markup
@@ -340,7 +495,7 @@ def handle_back_to_menu(call):
     accounts = count_accounts()
     markup = get_menu_markup(status, delay, accounts)
     bot.edit_message_text(
-        "📡 Control panel loaded.",
+        "⚙️ Control panel loaded.",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         reply_markup=markup
@@ -410,12 +565,12 @@ def handle_set_reaction(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "new_account")
 def handle_new_account(call):
-    user_data[call.message.chat.id] = {}
+    uid = str(call.from_user.id)
+    login_sessions[uid] = {"stage": "ask_api_id"}
     bot.edit_message_text(
         "Please send your API ID (numbers only):",
         chat_id=call.message.chat.id,
         message_id=call.message.message_id
     )
-    bot.register_next_step_handler(call.message, process_api_id)
 
 run_both()
