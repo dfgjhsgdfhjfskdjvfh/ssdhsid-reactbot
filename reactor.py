@@ -1,8 +1,8 @@
 import threading
 import asyncio
 import time
+import os
 from telethon import TelegramClient, events
-from telethon.sessions import StringSession
 from telethon.tl.functions.messages import SendReactionRequest
 from telethon.tl.types import ReactionEmoji, ChannelParticipantsAdmins
 
@@ -38,24 +38,20 @@ def get_reaction_emoji():
 
 def parse_login_line(line):
     try:
-        line = line.replace("'", "")
-        parts = line.split(":", 1)
-        api_id = int(parts[0].strip())
-        rest = parts[1]
-        api_hash, session_str = rest.split(",", 1)
-        api_hash = api_hash.strip()
-        session_str = session_str.strip()
-        return api_id, api_hash, session_str
-    except Exception:
+        line = line.replace("'", "").strip()
+        api_id, rest = line.split(":", 1)
+        api_hash, session_file = rest.split(",", 1)
+        return int(api_id.strip()), api_hash.strip(), session_file.strip()
+    except Exception as e:
         print(f"Invalid line in login_data.txt: {line}")
         return None
 
 
-def start_reaction_bot(api_id, api_hash, session_str):
+def start_reaction_bot(api_id, api_hash, session_file):
     try:
-        client = TelegramClient(StringSession(session_str), api_id, api_hash)
+        client = TelegramClient(session_file, api_id, api_hash)
     except ValueError:
-        print(f"Skipping account {api_id} due to invalid session string.")
+        print(f"Skipping account {api_id} due to invalid session file.")
         return None
 
     @client.on(events.NewMessage())
@@ -116,12 +112,16 @@ def main():
             for line in lines:
                 if not line.strip():
                     continue
-                parsed = parse_login_line(line.strip())
+                parsed = parse_login_line(line)
                 if parsed is None:
                     continue
-                api_id, api_hash, session_str = parsed
+                api_id, api_hash, session_file = parsed
 
-                t = start_reaction_bot(api_id, api_hash, session_str)
+                if not os.path.exists(session_file):
+                    print(f"[x] Session file not found: {session_file}")
+                    continue
+
+                t = start_reaction_bot(api_id, api_hash, session_file)
                 if t is not None:
                     threads.append(t)
 
